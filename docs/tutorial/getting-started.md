@@ -1,63 +1,54 @@
-# Getting started
+# Getting started with Pebble
 
-## 1 Prerequisites
+This tutorial will guide you through a typical scenario to get you started with
+Pebble.
+You will install Pebble, run the Pebble daemon with a basic configuration,
+manage a running service, and add on another configuration layer.
+
+## Prerequisites
 
 - A Linux machine.
 
-## 2 Install Pebble
+## Download and install Pebble
 
-### 2.1 Download and install the latest release
+The easiest way to install the latest Pebble release is by downloading the
+executable.
+If you prefer a different installation method, see {ref}`how_to_install_pebble`.
 
-Find the latest tag on the [latest release page](https://github.com/canonical/pebble/releases/latest), then run the following commands to download, extract, and install the latest release (replace `v1.11.0` with the latest tag and `amd64` with your architecture):
-
-```bash
-$ wget https://github.com/canonical/pebble/releases/download/v1.11.0/pebble_v1.11.0_linux_amd64.tar.gz
-$ tar zxvf pebble_v1.11.0_linux_amd64.tar.gz
-$ sudo mv pebble /usr/local/bin/ # make sure it's in your $PATH
+```{include} /reuse/common-blocks.md
+   :start-after: Start: Install Pebble executable
+   :end-before: End: Install Pebble executable
 ```
 
-### 2.2 Install from source
-
-Alternatively, you can build and install Pebble from source:
-
-1. Follow the official Go documentation [here](https://go.dev/doc/install) to download and install Go.
-2. After installing, you will want to add the `$GOBIN` directory to your `$PATH` so you can use the installed tools. For more information, refer to the [official documentation](https://go.dev/doc/install/source#environment).
-3. Run `go install github.com/canonical/pebble/cmd/pebble@latest` to build and install Pebble.
-
-### 2.3 Check that it's working
-
-After installation, if you run `pebble`, you should see some output equivalent to the following:
-
-```bash
-$ pebble
-Pebble lets you control services and perform management actions on
-the system that is running them.
-
-Usage: pebble <command> [<options>...]
-
-...
+```{include} /reuse/common-blocks.md
+   :start-after: Start: Verify Pebble installation
+   :end-before: End: Verify Pebble installation
 ```
 
-Pebble is invoked using `pebble <command>`. To get more information:
+For more information, see {ref}`reference_pebble_help_command`.
 
-- To see a help summary, type `pebble -h`.
-- To see a short description of all commands, type `pebble help --all`.
-- To see details for one command, type `pebble help <command>`.
+## Configure Pebble
 
-## 3 Configure Pebble
+Now that Pebble has been installed, you can set up a basic configuration for the
+service manager.
 
-First, create a directory for Pebble configuration:
+First, you will need to create a directory for storing the Pebble configuration
+files (also known as _layers_), and add the `PEBBLE` environment variable to the
+{file}`~/.bashrc` file.
 
-```bash
-$ mkdir -p ~/PEBBLE/layers
-$ export PEBBLE=$HOME/PEBBLE
-$ echo "export PEBBLE=$HOME/PEBBLE" >> ~/.bashrc # add $PEBBLE to your bashrc
+
+```{code} bash
+mkdir -p ~/PEBBLE/layers
+export PEBBLE=$HOME/PEBBLE
+echo "export PEBBLE=$HOME/PEBBLE" >> ~/.bashrc
 ```
 
-Then, create a simple layer:
+Next, create a simple configuration layer file by running:
 
-```bash
-$ echo """\
+```{code-block}
+:emphasize-lines: 8
+
+echo """\
 summary: Simple layer
 
 description: |
@@ -72,62 +63,103 @@ services:
 """ > $PEBBLE/layers/001-http-server.yaml
 ```
 
-This creates a simple layer containing only one service (which runs a basic HTTP server using Python's `http` module, listening on port 8080).
+This creates a simple layer configuration that contains a single service
+(running a basic HTTP server using the Python `http.server` module that listens
+on port `8080`) and is stored in the {file}`$PEBBLE/layers/001-http-server.yaml`
+file.
 
-## 4 Run the Pebble daemon
+## Start the Pebble daemon
+
+You are now ready to run the Pebble daemon. Return to your home directory and
+run:
 
 ```bash
-$ pebble run
-2024-06-02T11:30:02.925Z [pebble] Started daemon.
-2024-06-02T11:30:02.936Z [pebble] POST /v1/services 10.751704ms 202
-2024-06-02T11:30:02.936Z [pebble] Started default services with change 77.
-2024-06-02T11:30:02.942Z [pebble] Service "http-server" starting: python3 -m http.server 8080
+cd
+pebble run
 ```
 
-This starts the Pebble daemon, and as you can see from the log, our HTTP server is already started, which can be verified by running `curl localhost:8080` in another terminal tab.
+This command starts the Pebble daemon along with the HTTP server service, which
+should be indicated in the output as below:
 
-To exit the Pebble daemon, press Ctrl-C (which sends an "interrupt" signal to the process).
+```{terminal}
+   :input: pebble run
+   :user: user
+   :host: host
+   :dir: ~
 
-## 5 View, start, and stop services
+2024-06-10T04:46:22.507Z [pebble] Started daemon.
+2024-06-10T04:46:22.513Z [pebble] POST /v1/services 3.273411ms 202
+2024-06-10T04:46:22.516Z [pebble] Service "http-server" starting: python3 -m http.server 8080
+```
 
-You can view the status of services by running `pebble services`. Open another terminal tab, and run:
+You can verify that the HTTP server is running by opening a browser tab and
+going to `localhost:8080`; you should see a directory listing of your home
+directory.
+
+## Monitor the status of services
+
+While the Pebble daemon is running, you can retrieve the list of enabled
+services along with the current status for each service by opening another
+terminal tab / window and running:
 
 ```bash
-$ pebble services
+pebble services
+```
+
+The "Current" status for the `http-server` service should be "active".
+
+```{terminal}
+   :input: pebble services
+   :user: user
+   :host: host
+   :dir: ~
+
 Service      Startup  Current  Since
-http-server  enabled  active   today at 11:30 UTC
+http-server  enabled  active   today at 13:20 +08
 ```
 
-Use `pebble stop <service1> <service2> ...` to stop one or more services. Run:
+You can stop the running `http-server` service by running:
 
 ```bash
-$ pebble stop http-server
+pebble stop http-server
 ```
 
-And the service `http-server` is stopped. We can verify it by viewing all the services:
-
+Verify that the service has stopped running by running the `services` command
+again:
 ```bash
-$ pebble services
+pebble services
+```
+
+The "Current" status for the `http-server` service should now be "inactive".
+
+```{terminal}
+   :input: pebble services
+   :user: user
+   :host: host
+   :dir: ~
+
 Service      Startup  Current   Since
-http-server  enabled  inactive  today at 11:33 UTC
+http-server  enabled  inactive  today at 13:26 +08
 ```
 
-And, if we run `curl localhost:8080`, we get a "connection refused" error, which confirms the service is down.
+You can verify this by visiting `localhost:8080` in your browser tab again; it
+should display an error similar to "This site can't be reached".
 
-To start it again, run:
+To restart the service, run:
 
 ```bash
-$ pebble start http-server
+pebble start http-server
 ```
 
-And it's started now.
+## Add a configuration layer
 
-## 6 Add a new layer
+You can manage additional services with Pebble by adding another layer. To create
+a new layer, run:
 
-Now let's add another layer containing a different HTTP server. Create a new layer:
+```{code-block} bash
+:emphasize-lines: 8
 
-```bash
-$ echo """\
+echo """\
 summary: Simple layer 2
 
 description: |
@@ -139,46 +171,88 @@ services:
         summary: demo http server 2
         command: python3 -m http.server 8081
         startup: enabled
-""" > $PEBBLE/layers/002-another-server.yaml
+""" > $PEBBLE/layers/002-another-http-server.yaml
 ```
 
-This creates another layer containing only one service running an HTTP server listening on a different port 8081. Then let's add this layer to a plan:
+This creates another layer that also contains a single service (running a basic
+HTTP server using the Python `http.server` module that listens on port `8081`)
+and is stored in the {file}`$PEBBLE/layers/002-another-http-server.yaml` file.
+
+<!--
+There should be a reference / how-to with more information on what is a
+plan.
+The help output for `pebble help add` could be more detailed.
+ -->
+
+Add the new layer to a Pebble plan:
 
 ```bash
-$ pebble add layer1 $PEBBLE/layers/002-another-server.yaml
-Layer "layer1" added successfully from "/home/ubuntu/PEBBLE_HOME/layers/002-another-server.yaml"
+pebble add layer1 $PEBBLE/layers/002-another-http-server.yaml
 ```
 
-When we update the service configuration by adding a layer, the services changed won't be automatically restarted. If we check the services:
+If the layer is added successfully, this should produce the following output:
+
+```{terminal}
+   :input: pebble add layer1 $PEBBLE/layers/002-another-http-server.yaml
+   :user: user
+   :host: host
+   :dir: ~
+
+Layer "layer1" added successfully from "/home/user/PEBBLE/layers/002-another-http-server.yaml"
+```
+
+## Sync the service state
+
+Even though the service configuration has been updated with a new layer, the
+services won't be automatically restarted. If we check the status of services:
 
 ```bash
-$ pebble services
+pebble services
+```
+
+We can see the the `http-server-2` service has been added but is currently still
+"inactive".
+
+```{terminal}
+   :input: pebble services
+   :user: user
+   :host: host
+   :dir: ~
+
 Service        Startup  Current   Since
-http-server    enabled  active    today at 11:41 UTC
+http-server    enabled  active    today at 14:06 +08
 http-server-2  enabled  inactive  -
 ```
 
-We can see that although a new service has been added, it's not active yet.
-
-To bring the service state in sync with the new configuration, run `pebble replan`:
-
-```
-$ pebble replan
-2024-06-02T11:40:39Z INFO Service "http-server" already started.
-```
-
-Now if we check all the services:
+To sync the service state with the new configuration, run:
 
 ```bash
-$ pebble services
-Service        Startup  Current  Since
-http-server    enabled  active   today at 11:34 UTC
-http-server-2  enabled  active   today at 11:40 UTC
+pebble replan
 ```
 
-We can see that the new HTTP server defined in the newly added layer has been started as well.
+If we check the status of services again, the `http-server-2` service should
+have started and be shown as "active".
 
-## 7 Where to go from here
+```{terminal}
+   :input: pebble services
+   :user: user
+   :host: host
+   :dir: ~
+
+Service        Startup  Current  Since
+http-server    enabled  active   today at 14:06 +08
+http-server-2  enabled  active   today at 14:17 +08
+```
+
+## Exit the daemon
+
+To exit the Pebble daemon, press {kbd}`Ctrl+c` in the first terminal where you
+ran the `pebble run` command.
+
+This sends an interrupt signal to the Pebble daemon and stops all the running
+services.
+
+## Next steps
 
 - To learn more about running the Pebble daemon, see [How to run the daemon (server)](../how-to/run-the-daemon.md).
 - To learn more about viewing, starting and stopping services, see [How to view, start, and stop services](../how-to/view-start-stop-services.md).
