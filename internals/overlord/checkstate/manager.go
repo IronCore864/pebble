@@ -25,6 +25,7 @@ import (
 	"gopkg.in/tomb.v2"
 
 	"github.com/canonical/pebble/internals/logger"
+	"github.com/canonical/pebble/internals/metrics"
 	"github.com/canonical/pebble/internals/overlord/planstate"
 	"github.com/canonical/pebble/internals/overlord/state"
 	"github.com/canonical/pebble/internals/plan"
@@ -46,7 +47,7 @@ type CheckManager struct {
 	failureHandlers []FailureFunc
 
 	checksLock sync.Mutex
-	checks     map[string]CheckInfo
+	checks     map[string]*CheckInfo
 }
 
 // FailureFunc is the type of function called when a failure action is triggered.
@@ -56,7 +57,7 @@ type FailureFunc func(name string)
 func NewManager(s *state.State, runner *state.TaskRunner, planMgr *planstate.PlanManager) *CheckManager {
 	manager := &CheckManager{
 		state:   s,
-		checks:  make(map[string]CheckInfo),
+		checks:  make(map[string]*CheckInfo),
 		planMgr: planMgr,
 	}
 
@@ -323,13 +324,22 @@ func (m *CheckManager) Checks() ([]*CheckInfo, error) {
 
 	infos := make([]*CheckInfo, 0, len(m.checks))
 	for _, info := range m.checks {
-		info := info // take the address of a new variable each time
-		infos = append(infos, &info)
+		copy := *info
+		infos = append(infos, &copy)
 	}
 	sort.Slice(infos, func(i, j int) bool {
 		return infos[i].Name < infos[j].Name
 	})
 	return infos, nil
+}
+
+func (m *CheckManager) ensureCheck(name string) *CheckInfo {
+	check, ok := m.checks[name]
+	if !ok {
+		check = &CheckInfo{Name: name}
+		m.checks[name] = check
+	}
+	return check
 }
 
 func (m *CheckManager) updateCheckInfo(config *plan.Check, changeID string, failures int) {
@@ -346,15 +356,30 @@ func (m *CheckManager) updateCheckInfo(config *plan.Check, changeID string, fail
 	if startup == plan.CheckStartupUnknown {
 		startup = plan.CheckStartupEnabled
 	}
-	m.checks[config.Name] = CheckInfo{
-		Name:      config.Name,
-		Level:     config.Level,
-		Startup:   startup,
-		Status:    status,
-		Failures:  failures,
-		Threshold: config.Threshold,
-		ChangeID:  changeID,
-	}
+
+	check := m.ensureCheck(config.Name)
+	check.Level = config.Level
+	check.Startup = startup
+	check.Status = status
+	check.Failures = failures
+	check.Threshold = config.Threshold
+	check.ChangeID = changeID
+}
+
+func (m *CheckManager) incPerformCheckCount(config *plan.Check) {
+	m.checksLock.Lock()
+	defer m.checksLock.Unlock()
+
+	check := m.ensureCheck(config.Name)
+	check.performCheckCount += 1
+}
+
+func (m *CheckManager) incRecoverCheckCount(config *plan.Check) {
+	m.checksLock.Lock()
+	defer m.checksLock.Unlock()
+
+	check := m.ensureCheck(config.Name)
+	check.recoverCheckCount += 1
 }
 
 func (m *CheckManager) deleteCheckInfo(name string) {
@@ -366,13 +391,15 @@ func (m *CheckManager) deleteCheckInfo(name string) {
 
 // CheckInfo provides status information about a single check.
 type CheckInfo struct {
-	Name      string
-	Level     plan.CheckLevel
-	Startup   plan.CheckStartup
-	Status    CheckStatus
-	Failures  int
-	Threshold int
-	ChangeID  string
+	Name              string
+	Level             plan.CheckLevel
+	Startup           plan.CheckStartup
+	Status            CheckStatus
+	Failures          int
+	Threshold         int
+	ChangeID          string
+	performCheckCount int64
+	recoverCheckCount int64
 }
 
 type CheckStatus string
@@ -385,6 +412,69 @@ const (
 
 type checker interface {
 	check(ctx context.Context) error
+}
+
+func (c *CheckInfo) writeMetrics(writer metrics.Writer) error {
+	checkUp := int64(0)
+	if c.Status == CheckStatusUp {
+		checkUp = 1
+	}
+	err := writer.Write(metrics.Metric{
+		Name:       "pebble_check_up",
+		Type:       metrics.TypeGaugeInt,
+		ValueInt64: checkUp,
+		Comment:    "Whether the health check is up (1) or not (0)",
+		Labels:     []metrics.Label{metrics.NewLabel("check", c.Name)},
+	})
+	if err != nil {
+		return err
+	}
+
+	err = writer.Write(metrics.Metric{
+		Name:       "pebble_perform_check_count",
+		Type:       metrics.TypeCounterInt,
+		ValueInt64: c.performCheckCount,
+		Comment:    "Number of times the perform-check has run",
+		Labels:     []metrics.Label{metrics.NewLabel("check", c.Name)},
+	})
+	if err != nil {
+		return err
+	}
+
+	err = writer.Write(metrics.Metric{
+		Name:       "pebble_recover_check_count",
+		Type:       metrics.TypeCounterInt,
+		ValueInt64: c.recoverCheckCount,
+		Comment:    "Number of times the recover-check has run",
+		Labels:     []metrics.Label{metrics.NewLabel("check", c.Name)},
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// WriteMetrics collects and writes metrics for all checks to the provided writer.
+func (m *CheckManager) WriteMetrics(writer metrics.Writer) error {
+	m.checksLock.Lock()
+	defer m.checksLock.Unlock()
+
+	names := make([]string, 0, len(m.checks))
+	for name := range m.checks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		info := m.checks[name]
+		err := info.writeMetrics(writer)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // ChecksNotFound is the error returned by StartChecks or StopChecks when a check

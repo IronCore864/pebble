@@ -15,6 +15,7 @@
 package checkstate_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -28,6 +29,7 @@ import (
 	. "gopkg.in/check.v1"
 
 	"github.com/canonical/pebble/internals/logger"
+	"github.com/canonical/pebble/internals/metrics"
 	"github.com/canonical/pebble/internals/overlord"
 	"github.com/canonical/pebble/internals/overlord/checkstate"
 	"github.com/canonical/pebble/internals/overlord/planstate"
@@ -451,7 +453,6 @@ func (s *ManagerSuite) TestPlanChangedServiceContext(c *C) {
 		},
 	}
 	s.manager.PlanChanged(origPlan)
-
 	waitChecks(c, s.manager, []*checkstate.CheckInfo{
 		{Name: "chk1", Startup: "enabled", Status: "up", Threshold: 3},
 		{Name: "chk2", Startup: "enabled", Status: "up", Threshold: 3},
@@ -868,4 +869,130 @@ func (s *ManagerSuite) TestReplan(c *C) {
 	st.Unlock()
 	c.Assert(status, Matches, "Do.*")
 	c.Assert(change.Kind(), Equals, "perform-check")
+}
+
+func (s *ManagerSuite) TestMetricsPerformCheck(c *C) {
+	tempDir := c.MkDir()
+	tempFile := filepath.Join(tempDir, "file.txt")
+	command := fmt.Sprintf(`/bin/sh -c 'echo -n x >>%s'`, tempFile)
+	s.manager.PlanChanged(&plan.Plan{
+		Checks: map[string]*plan.Check{
+			"chk1": {
+				Name:      "chk1",
+				Override:  "replace",
+				Period:    plan.OptionalDuration{Value: 10 * time.Millisecond},
+				Timeout:   plan.OptionalDuration{Value: time.Second},
+				Threshold: 3,
+				Exec:      &plan.ExecCheck{Command: command},
+				Startup:   plan.CheckStartupEnabled,
+			},
+		},
+	})
+
+	// Wait for check to run at least twice
+	for i := 0; ; i++ {
+		if i >= 1000 {
+			c.Fatalf("failed waiting for check to run")
+		}
+		b, _ := os.ReadFile(tempFile)
+		if len(b) >= 2 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	buf := new(bytes.Buffer)
+	writer := metrics.NewOpenTelemetryWriter(buf)
+	s.manager.WriteMetrics(writer)
+	expected := `
+# HELP pebble_check_up Whether the health check is up (1) or not (0)
+# TYPE pebble_check_up gauge
+pebble_check_up{check="chk1"} 1
+# HELP pebble_perform_check_count Number of times the perform-check has run
+# TYPE pebble_perform_check_count counter
+pebble_perform_check_count{check="chk1"} 2
+# HELP pebble_recover_check_count Number of times the recover-check has run
+# TYPE pebble_recover_check_count counter
+pebble_recover_check_count{check="chk1"} 0
+`[1:]
+	c.Assert(buf.String(), Equals, expected)
+}
+
+func (s *ManagerSuite) TestMetricsRecoverCheck(c *C) {
+	testPath := c.MkDir() + "/test"
+	err := os.WriteFile(testPath, nil, 0o644)
+	c.Assert(err, IsNil)
+	s.manager.PlanChanged(&plan.Plan{
+		Checks: map[string]*plan.Check{
+			"chk1": {
+				Name:      "chk1",
+				Override:  "replace",
+				Period:    plan.OptionalDuration{Value: 20 * time.Millisecond},
+				Timeout:   plan.OptionalDuration{Value: 100 * time.Millisecond},
+				Threshold: 3,
+				Exec: &plan.ExecCheck{
+					Command: fmt.Sprintf(`/bin/sh -c 'echo details >/dev/stderr; [ ! -f %s ]'`, testPath),
+				},
+			},
+		},
+	})
+
+	// After 2 failures, check is still up, perform-check counter is 2.
+	waitCheck(c, s.manager, "chk1", func(check *checkstate.CheckInfo) bool {
+		return check.Failures == 2
+	})
+
+	buf := new(bytes.Buffer)
+	writer := metrics.NewOpenTelemetryWriter(buf)
+	s.manager.WriteMetrics(writer)
+	expected := `
+# HELP pebble_check_up Whether the health check is up (1) or not (0)
+# TYPE pebble_check_up gauge
+pebble_check_up{check="chk1"} 1
+# HELP pebble_perform_check_count Number of times the perform-check has run
+# TYPE pebble_perform_check_count counter
+pebble_perform_check_count{check="chk1"} 2
+# HELP pebble_recover_check_count Number of times the recover-check has run
+# TYPE pebble_recover_check_count counter
+pebble_recover_check_count{check="chk1"} 0
+`[1:]
+	c.Assert(buf.String(), Equals, expected)
+
+	// After 3 failures, check is down, perform-check counter is 3, recover-check counter is 0.
+	waitCheck(c, s.manager, "chk1", func(check *checkstate.CheckInfo) bool {
+		return check.Failures == 3
+	})
+	buf.Reset()
+	s.manager.WriteMetrics(writer)
+	expected = `
+# HELP pebble_check_up Whether the health check is up (1) or not (0)
+# TYPE pebble_check_up gauge
+pebble_check_up{check="chk1"} 0
+# HELP pebble_perform_check_count Number of times the perform-check has run
+# TYPE pebble_perform_check_count counter
+pebble_perform_check_count{check="chk1"} 3
+# HELP pebble_recover_check_count Number of times the recover-check has run
+# TYPE pebble_recover_check_count counter
+pebble_recover_check_count{check="chk1"} 0
+`[1:]
+	c.Assert(buf.String(), Equals, expected)
+
+	// After 4 failures, check is down, perform-check counter is 3, recover-check counter is 1.
+	waitCheck(c, s.manager, "chk1", func(check *checkstate.CheckInfo) bool {
+		return check.Failures == 4
+	})
+	buf.Reset()
+	s.manager.WriteMetrics(writer)
+	expected = `
+# HELP pebble_check_up Whether the health check is up (1) or not (0)
+# TYPE pebble_check_up gauge
+pebble_check_up{check="chk1"} 0
+# HELP pebble_perform_check_count Number of times the perform-check has run
+# TYPE pebble_perform_check_count counter
+pebble_perform_check_count{check="chk1"} 3
+# HELP pebble_recover_check_count Number of times the recover-check has run
+# TYPE pebble_recover_check_count counter
+pebble_recover_check_count{check="chk1"} 1
+`[1:]
+	c.Assert(buf.String(), Equals, expected)
 }
