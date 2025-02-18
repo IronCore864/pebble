@@ -57,7 +57,7 @@ func (m *CheckManager) performCheckAndSendResult(ctx *checkContext) error {
 			// Update number of failures in check info. In threshold
 			// case, check info will be updated with new change ID by
 			// changeStatusChanged.
-			m.updateCheckInfo(ctx.config, ctx.changeID, ctx.details.Failures)
+			m.updateCheckData(ctx.config, ctx.changeID, ctx.details.Failures)
 		}
 
 		m.state.Lock()
@@ -81,7 +81,7 @@ func (m *CheckManager) performCheckAndSendResult(ctx *checkContext) error {
 			return err
 		}
 	} else if ctx.details.Failures > 0 {
-		m.updateCheckInfo(ctx.config, ctx.changeID, 0)
+		m.updateCheckData(ctx.config, ctx.changeID, 0)
 
 		m.state.Lock()
 		ctx.task.Logf("succeeded after %s", pluralise(ctx.details.Failures, "failure", "failures"))
@@ -173,7 +173,7 @@ func (m *CheckManager) recoverCheckAndSendResult(ctx *checkContext) error {
 	}
 	if err != nil {
 		ctx.details.Failures++
-		m.updateCheckInfo(ctx.config, ctx.changeID, ctx.details.Failures)
+		m.updateCheckData(ctx.config, ctx.changeID, ctx.details.Failures)
 
 		m.state.Lock()
 		ctx.task.Set(checkDetailsAttr, &ctx.details)
@@ -289,13 +289,13 @@ func (m *CheckManager) RunCheck(ctx context.Context, check *plan.Check) error {
 	// chk := newChecker(check)
 	// return runCheck(ctx, chk, check.Timeout.Value)
 	m.checksLock.Lock()
-	checkInfo := m.ensureCheck(check.Name)
-	refresh := checkInfo.refresh
-	result := checkInfo.result
+	checkData := m.ensureCheck(check.Name)
+	refresh := checkData.refresh
+	result := checkData.result
 	m.checksLock.Unlock()
 
 	if refresh == nil || result == nil {
-		return fmt.Errorf("refresh channels not initialized for check %q", checkInfo.Name)
+		return fmt.Errorf("refresh channels not initialized for check %q", checkData.name)
 	}
 
 	refresh <- struct{}{}
