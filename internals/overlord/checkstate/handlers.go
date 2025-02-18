@@ -44,18 +44,18 @@ func (m *CheckManager) performCheckAndSendResult(ctx *checkContext) error {
 	if ctx.sendResult {
 		ctx.result <- err
 	}
-	m.incPerformCheckCount(ctx.config)
 	if !ctx.tomb.Alive() {
 		return checkStopped(ctx.config.Name, ctx.task.Kind(), ctx.tomb.Err())
 	}
 	if err != nil {
 		// Record check failure and perform any action if the threshold
 		// is reached (for example, restarting a service).
+		m.incFailureCount(ctx.config)
 		ctx.details.Failures++
 		atThreshold := ctx.details.Failures >= ctx.config.Threshold
 		if !atThreshold {
 			// Update number of failures in check info. In threshold
-			// case, check info will be updated with new change ID by
+			// case, check data will be updated with new change ID by
 			// changeStatusChanged.
 			m.updateCheckData(ctx.config, ctx.changeID, ctx.details.Failures)
 		}
@@ -80,14 +80,17 @@ func (m *CheckManager) performCheckAndSendResult(ctx *checkContext) error {
 			// and logs the error to the task log.
 			return err
 		}
-	} else if ctx.details.Failures > 0 {
-		m.updateCheckData(ctx.config, ctx.changeID, 0)
+	} else {
+		m.incSuccessCount(ctx.config)
+		if ctx.details.Failures > 0 {
+			m.updateCheckData(ctx.config, ctx.changeID, 0)
 
-		m.state.Lock()
-		ctx.task.Logf("succeeded after %s", pluralise(ctx.details.Failures, "failure", "failures"))
-		ctx.details.Failures = 0
-		ctx.task.Set(checkDetailsAttr, &ctx.details)
-		m.state.Unlock()
+			m.state.Lock()
+			ctx.task.Logf("succeeded after %s", pluralise(ctx.details.Failures, "failure", "failures"))
+			ctx.details.Failures = 0
+			ctx.task.Set(checkDetailsAttr, &ctx.details)
+			m.state.Unlock()
+		}
 	}
 	return nil
 }
@@ -167,11 +170,11 @@ func (m *CheckManager) recoverCheckAndSendResult(ctx *checkContext) error {
 	if ctx.sendResult {
 		ctx.result <- err
 	}
-	m.incRecoverCheckCount(ctx.config)
 	if !ctx.tomb.Alive() {
 		return checkStopped(ctx.config.Name, ctx.task.Kind(), ctx.tomb.Err())
 	}
 	if err != nil {
+		m.incFailureCount(ctx.config)
 		ctx.details.Failures++
 		m.updateCheckData(ctx.config, ctx.changeID, ctx.details.Failures)
 
@@ -185,6 +188,7 @@ func (m *CheckManager) recoverCheckAndSendResult(ctx *checkContext) error {
 	} else {
 		// Check succeeded, switch to performing a succeeding check.
 		// Check info will be updated with new change ID by changeStatusChanged.
+		m.incSuccessCount(ctx.config)
 		ctx.details.Failures = 0 // not strictly needed, but just to be safe
 		ctx.details.Proceed = true
 		m.state.Lock()
