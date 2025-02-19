@@ -108,12 +108,12 @@ func (m *CheckManager) doPerformCheck(task *state.Task, tomb *tombpkg.Tomb) erro
 
 	logger.Debugf("Performing check %q with period %v", details.Name, config.Period.Value)
 
-	// Retrieve CheckInfo and its channels
+	// Retrieve checkData and its channels
 	m.checksLock.Lock()
 	m.ensureCheck(config.Name)
-	checkInfo := m.checks[details.Name]
-	refresh := checkInfo.refresh
-	result := checkInfo.result
+	checkData := m.checks[details.Name]
+	refresh := checkData.refresh
+	result := checkData.result
 	m.checksLock.Unlock()
 
 	ticker := time.NewTicker(config.Period.Value)
@@ -211,12 +211,12 @@ func (m *CheckManager) doRecoverCheck(task *state.Task, tomb *tombpkg.Tomb) erro
 
 	logger.Debugf("Recovering check %q with period %v", details.Name, config.Period.Value)
 
-	// Retrieve CheckInfo and its channels
+	// Retrieve checkData and its channels
 	m.checksLock.Lock()
 	m.ensureCheck(config.Name)
-	checkInfo := m.checks[details.Name]
-	refresh := checkInfo.refresh
-	result := checkInfo.result
+	checkData := m.checks[details.Name]
+	refresh := checkData.refresh
+	result := checkData.result
 	m.checksLock.Unlock()
 
 	ticker := time.NewTicker(config.Period.Value)
