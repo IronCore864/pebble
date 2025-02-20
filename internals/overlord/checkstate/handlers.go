@@ -38,63 +38,6 @@ type checkContext struct {
 	result     chan error
 }
 
-// performCheckAndSendResult runs the check and optionally sends the result.
-func (m *CheckManager) performCheckAndSendResult(ctx *checkContext) error {
-	err := runCheck(ctx.tomb.Context(nil), ctx.chk, ctx.config.Timeout.Value)
-	if ctx.sendResult {
-		ctx.result <- err
-	}
-	if !ctx.tomb.Alive() {
-		return checkStopped(ctx.config.Name, ctx.task.Kind(), ctx.tomb.Err())
-	}
-	if err != nil {
-		// Record check failure and perform any action if the threshold
-		// is reached (for example, restarting a service).
-		m.incFailureCount(ctx.config)
-		ctx.details.Failures++
-		atThreshold := ctx.details.Failures >= ctx.config.Threshold
-		if !atThreshold {
-			// Update number of failures in check info. In threshold
-			// case, check data will be updated with new change ID by
-			// changeStatusChanged.
-			m.updateCheckData(ctx.config, ctx.changeID, ctx.details.Failures)
-		}
-
-		m.state.Lock()
-		if atThreshold {
-			ctx.details.Proceed = true
-		} else {
-			// Add error to task log, but only if we haven't reached the
-			// threshold. When we hit the threshold, the "return err"
-			// below will cause the error to be logged.
-			logTaskError(ctx.task, err)
-		}
-		ctx.task.Set(checkDetailsAttr, &ctx.details)
-		m.state.Unlock()
-
-		logger.Noticef("Check %q failure %d/%d: %v", ctx.config.Name, ctx.details.Failures, ctx.config.Threshold, err)
-		if atThreshold {
-			logger.Noticef("Check %q threshold %d hit, triggering action and recovering", ctx.config.Name, ctx.config.Threshold)
-			m.callFailureHandlers(ctx.config.Name)
-			// Returning the error means perform-check goes to Error status
-			// and logs the error to the task log.
-			return err
-		}
-	} else {
-		m.incSuccessCount(ctx.config)
-		if ctx.details.Failures > 0 {
-			m.updateCheckData(ctx.config, ctx.changeID, 0)
-
-			m.state.Lock()
-			ctx.task.Logf("succeeded after %s", pluralise(ctx.details.Failures, "failure", "failures"))
-			ctx.details.Failures = 0
-			ctx.task.Set(checkDetailsAttr, &ctx.details)
-			m.state.Unlock()
-		}
-	}
-	return nil
-}
-
 func (m *CheckManager) doPerformCheck(task *state.Task, tomb *tombpkg.Tomb) error {
 	m.state.Lock()
 	changeID := task.Change().ID()
@@ -121,15 +64,57 @@ func (m *CheckManager) doPerformCheck(task *state.Task, tomb *tombpkg.Tomb) erro
 
 	chk := newChecker(config)
 
-	ctx := &checkContext{
-		task:       task,
-		tomb:       tomb,
-		chk:        chk,
-		changeID:   changeID,
-		config:     config,
-		details:    &details,
-		sendResult: false,
-		result:     result,
+	performCheck := func() error {
+		err := runCheck(tomb.Context(nil), chk, config.Timeout.Value)
+		if !tomb.Alive() {
+			return checkStopped(config.Name, task.Kind(), tomb.Err())
+		}
+		if err != nil {
+			// Record check failure and perform any action if the threshold
+			// is reached (for example, restarting a service).
+			m.incFailureCount(config)
+			details.Failures++
+			atThreshold := details.Failures >= config.Threshold
+			if !atThreshold {
+				// Update number of failures in check info. In threshold
+				// case, check info will be updated with new change ID by
+				// changeStatusChanged.
+				m.updateCheckData(config, changeID, details.Failures)
+			}
+
+			m.state.Lock()
+			if atThreshold {
+				details.Proceed = true
+			} else {
+				// Add error to task log, but only if we haven't reached the
+				// threshold. When we hit the threshold, the "return err"
+				// below will cause the error to be logged.
+				logTaskError(task, err)
+			}
+			task.Set(checkDetailsAttr, &details)
+			m.state.Unlock()
+
+			logger.Noticef("Check %q failure %d/%d: %v", config.Name, details.Failures, config.Threshold, err)
+			if atThreshold {
+				logger.Noticef("Check %q threshold %d hit, triggering action and recovering", config.Name, config.Threshold)
+				m.callFailureHandlers(config.Name)
+				// Returning the error means perform-check goes to Error status
+				// and logs the error to the task log.
+				return err
+			}
+		} else {
+			m.incSuccessCount(config)
+			if details.Failures > 0 {
+				m.updateCheckData(config, changeID, 0)
+
+				m.state.Lock()
+				task.Logf("succeeded after %s", pluralise(details.Failures, "failure", "failures"))
+				details.Failures = 0
+				task.Set(checkDetailsAttr, &details)
+				m.state.Unlock()
+			}
+		}
+		return nil
 	}
 
 	for {
@@ -137,13 +122,18 @@ func (m *CheckManager) doPerformCheck(task *state.Task, tomb *tombpkg.Tomb) erro
 		case <-refresh:
 			// Reset ticker on refresh.
 			ticker.Reset(config.Period.Value)
-			ctx.sendResult = true
-			err := m.performCheckAndSendResult(ctx)
+			err := performCheck()
+			result <- err
 			if err != nil {
 				return err
 			}
 		case <-ticker.C:
-			err := m.performCheckAndSendResult(ctx)
+			err := performCheck()
+			select {
+			case <-refresh: // If refresh requested while running check, send result.
+				result <- err
+			default: // Otherwise don't send result.
+			}
 			if err != nil {
 				return err
 			}
@@ -160,40 +150,6 @@ func runCheck(ctx context.Context, chk checker, timeout time.Duration) error {
 	err := chk.check(ctx)
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("check timed out after %v", timeout)
-	}
-	return err
-}
-
-// recoverCheckAndSendResult runs the check and optionally sends the result.
-func (m *CheckManager) recoverCheckAndSendResult(ctx *checkContext) error {
-	err := runCheck(ctx.tomb.Context(nil), ctx.chk, ctx.config.Timeout.Value)
-	if ctx.sendResult {
-		ctx.result <- err
-	}
-	if !ctx.tomb.Alive() {
-		return checkStopped(ctx.config.Name, ctx.task.Kind(), ctx.tomb.Err())
-	}
-	if err != nil {
-		m.incFailureCount(ctx.config)
-		ctx.details.Failures++
-		m.updateCheckData(ctx.config, ctx.changeID, ctx.details.Failures)
-
-		m.state.Lock()
-		ctx.task.Set(checkDetailsAttr, &ctx.details)
-		logTaskError(ctx.task, err)
-		m.state.Unlock()
-
-		logger.Noticef("Check %q failure %d/%d: %v", ctx.config.Name, ctx.details.Failures, ctx.config.Threshold, err)
-
-	} else {
-		// Check succeeded, switch to performing a succeeding check.
-		// Check info will be updated with new change ID by changeStatusChanged.
-		m.incSuccessCount(ctx.config)
-		ctx.details.Failures = 0 // not strictly needed, but just to be safe
-		ctx.details.Proceed = true
-		m.state.Lock()
-		ctx.task.Set(checkDetailsAttr, &ctx.details)
-		m.state.Unlock()
 	}
 	return err
 }
@@ -224,15 +180,32 @@ func (m *CheckManager) doRecoverCheck(task *state.Task, tomb *tombpkg.Tomb) erro
 
 	chk := newChecker(config)
 
-	ctx := &checkContext{
-		task:       task,
-		tomb:       tomb,
-		chk:        chk,
-		changeID:   changeID,
-		config:     config,
-		details:    &details,
-		sendResult: false,
-		result:     result,
+	recoverCheck := func() error {
+		err := runCheck(tomb.Context(nil), chk, config.Timeout.Value)
+		if !tomb.Alive() {
+			return checkStopped(config.Name, task.Kind(), tomb.Err())
+		}
+		if err != nil {
+			details.Failures++
+			m.updateCheckData(config, changeID, details.Failures)
+
+			m.state.Lock()
+			task.Set(checkDetailsAttr, &details)
+			logTaskError(task, err)
+			m.state.Unlock()
+
+			logger.Noticef("Check %q failure %d/%d: %v", config.Name, details.Failures, config.Threshold, err)
+			return err
+		}
+
+		// Check succeeded, switch to performing a succeeding check.
+		// Check info will be updated with new change ID by changeStatusChanged.
+		details.Failures = 0 // not strictly needed, but just to be safe
+		details.Proceed = true
+		m.state.Lock()
+		task.Set(checkDetailsAttr, &details)
+		m.state.Unlock()
+		return nil
 	}
 
 	for {
@@ -240,24 +213,29 @@ func (m *CheckManager) doRecoverCheck(task *state.Task, tomb *tombpkg.Tomb) erro
 		case <-refresh:
 			// Reset ticker on refresh.
 			ticker.Reset(config.Period.Value)
-			ctx.sendResult = true
-			err := m.recoverCheckAndSendResult(ctx)
+			err := recoverCheck()
+			result <- err
 			if err != nil {
 				if err == tomb.Err() {
 					return err
 				}
 				break
 			}
-			return err
+			return nil
 		case <-ticker.C:
-			err := m.recoverCheckAndSendResult(ctx)
+			err := recoverCheck()
+			select {
+			case <-refresh: // If refresh requested while running check, send result.
+				result <- err
+			default: // Otherwise don't send result.
+			}
 			if err != nil {
 				if err == tomb.Err() {
 					return err
 				}
 				break
 			}
-			return err
+			return nil
 		case <-tomb.Dying():
 			return checkStopped(config.Name, task.Kind(), tomb.Err())
 		}
@@ -302,7 +280,12 @@ func (m *CheckManager) RunCheck(ctx context.Context, check *plan.Check) error {
 		return fmt.Errorf("refresh channels not initialized for check %q", checkData.name)
 	}
 
-	refresh <- struct{}{}
+	select {
+	case refresh <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 	select {
 	case result := <-result:
 		return result
