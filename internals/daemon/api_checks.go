@@ -16,6 +16,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/canonical/x-go/strutil"
@@ -69,6 +70,34 @@ func v1GetChecks(c *Command, r *http.Request, _ *UserState) Response {
 		}
 	}
 	return SyncResponse(infos)
+}
+
+func v1PostChecksRun(c *Command, r *http.Request, _ *UserState) Response {
+	var payload struct {
+		Check string `json:"check"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&payload); err != nil {
+		return BadRequest("cannot decode data from request body: %v", err)
+	}
+
+	if payload.Check == "" {
+		return BadRequest("must specify check name")
+	}
+
+	plan := c.d.overlord.PlanManager().Plan()
+	check, ok := plan.Checks[payload.Check]
+	if !ok {
+		return NotFound("cannot find check with name %q", payload.Check)
+	}
+
+	checkMgr := c.d.overlord.CheckManager()
+	err := checkMgr.RunCheck(r.Context(), check)
+	if err != nil {
+		return BadGateway("%v", err)
+	}
+
+	return SyncResponse(fmt.Sprintf("Check %q succeeded.", payload.Check))
 }
 
 func v1PostChecks(c *Command, r *http.Request, _ *UserState) Response {

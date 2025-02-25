@@ -344,7 +344,11 @@ func (m *CheckManager) Checks() ([]*CheckInfo, error) {
 func (m *CheckManager) ensureCheck(name string) *checkData {
 	check, ok := m.checks[name]
 	if !ok {
-		check = &checkData{name: name}
+		check = &checkData{
+			name:    name,
+			refresh: make(chan struct{}),
+			result:  make(chan error),
+		}
 		m.checks[name] = check
 	}
 	return check
@@ -419,6 +423,8 @@ type checkData struct {
 	changeID     string
 	successCount int64
 	failureCount int64
+	refresh      chan struct{}
+	result       chan error
 }
 
 type CheckStatus string

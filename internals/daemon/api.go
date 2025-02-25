@@ -95,6 +95,10 @@ var API = []*Command{{
 	GET:         v1GetChecks,
 	POST:        v1PostChecks,
 }, {
+	Path:        "/v1/checks/run",
+	WriteAccess: AdminAccess{},
+	POST:        v1PostChecksRun,
+}, {
 	Path:        "/v1/notices",
 	ReadAccess:  UserAccess{},
 	WriteAccess: UserAccess{}, // any user is allowed to add a notice with their own uid

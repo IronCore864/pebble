@@ -285,6 +285,9 @@ func (s *ManagerSuite) TestFailures(c *C) {
 	c.Assert(check.Threshold, Equals, 3)
 	c.Assert(check.Status, Equals, checkstate.CheckStatusDown)
 	c.Assert(notifies.Load(), Equals, int32(1))
+	log := lastTaskLog(s.overlord.State(), check.ChangeID)
+	fmt.Printf("=== %s\n", log)
+	c.Assert(log, Matches, ".* ERROR exit status 1; details")
 	c.Assert(lastTaskLog(s.overlord.State(), check.ChangeID), Matches, ".* ERROR exit status 1; details")
 	c.Assert(check.ChangeID, Equals, recoverChangeID)
 
