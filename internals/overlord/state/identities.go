@@ -55,7 +55,12 @@ type LocalIdentity struct {
 // BasicIdentity holds identity configuration specific to the "basic" type
 // (for HTTP basic authentication).
 type BasicIdentity struct {
+<<<<<<< HEAD
 	Password string // Note: this is the sha512-crypt hashed password.
+=======
+	// Password holds the user's sha512-crypt-hashed password.
+	Password string
+>>>>>>> master
 }
 
 // This is used to ensure we send a well-formed identity Name.
@@ -71,11 +76,19 @@ func (d *Identity) validate(name string) error {
 		return fmt.Errorf("identity name %q invalid: must start with an alphabetic character and only contain alphanumeric characters, underscore, and hyphen", d.Name)
 	}
 
+<<<<<<< HEAD
 	return d.validateExcludingName()
 }
 
 // validateExcludingName checks that the identity is valid, returning an error if not.
 func (d *Identity) validateExcludingName() error {
+=======
+	return d.validateAccess()
+}
+
+// validateAccess checks that the identity's access and type are valid, returning an error if not.
+func (d *Identity) validateAccess() error {
+>>>>>>> master
 	if d == nil {
 		return errors.New("identity must not be nil")
 	}
@@ -160,14 +173,21 @@ func (d *Identity) UnmarshalJSON(data []byte) error {
 		identity.Local = &LocalIdentity{UserID: *ai.Local.UserID}
 	}
 	if ai.Basic != nil {
+<<<<<<< HEAD
 		if ai.Basic.Password == "" {
 			return errors.New("basic identity must specify password (hashed)")
 		}
+=======
+>>>>>>> master
 		identity.Basic = &BasicIdentity{Password: ai.Basic.Password}
 	}
 
 	// Perform additional validation using the local Identity type.
+<<<<<<< HEAD
 	err = identity.validateExcludingName()
+=======
+	err = identity.validateAccess()
+>>>>>>> master
 	if err != nil {
 		return err
 	}
@@ -326,12 +346,12 @@ func (s *State) Identities() map[string]*Identity {
 // if there is none.
 //
 // Identity priority:
-//  1. If both username and password are provided, the function attempts to
-//     match a basic type identity. The userID is ignored in this case. If
+//  1. If either username or password are provided, the function attempts to
+//     match a "basic" type identity. The userID is ignored in this case. If
 //     a matching username is found but the password verification fails, nil
 //     is returned immediately.
 //  2. If username and password are not both provided, the function attempts to
-//     match a local type identity using the userID.
+//     match a "local" type identity using the userID.
 //
 // If no matching identity is found for the given inputs, nil is returned.
 func (s *State) IdentityFromInputs(userID *uint32, username, password string) *Identity {
@@ -339,6 +359,7 @@ func (s *State) IdentityFromInputs(userID *uint32, username, password string) *I
 
 	switch {
 	case username != "" || password != "":
+<<<<<<< HEAD
 		// Prioritize username/password if provided, because they come from HTTP
 		// Authorization header, a per-request, client controlled property. If set
 		// by the client, it's intentional, so it should have a higher priority.
@@ -352,6 +373,22 @@ func (s *State) IdentityFromInputs(userID *uint32, username, password string) *I
 					return nil
 				}
 			}
+=======
+		// Prioritize username/password if either is provided, because they come from HTTP
+		// Authorization header, a per-request, client controlled property. If set
+		// by the client, it's intentional, so it should have a higher priority.
+		passwordBytes := []byte(password)
+		for _, identity := range s.identities {
+			if identity.Basic == nil || identity.Name != username {
+				continue
+			}
+			crypt := sha512_crypt.New()
+			err := crypt.Verify(identity.Basic.Password, passwordBytes)
+			if err == nil {
+				return identity
+			}
+			return nil
+>>>>>>> master
 		}
 	case userID != nil:
 		for _, identity := range s.identities {

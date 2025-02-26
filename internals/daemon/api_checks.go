@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 
 	"github.com/canonical/x-go/strutil"
 
@@ -138,8 +139,10 @@ func v1PostChecks(c *Command, r *http.Request, _ *UserState) Response {
 	st := c.d.overlord.State()
 	st.EnsureBefore(0) // start and stop tasks right away
 
-	type responsePayload struct {
-		Changed []string `json:"changed"`
-	}
+	sort.Strings(changed)
 	return SyncResponse(responsePayload{Changed: changed})
+}
+
+type responsePayload struct {
+	Changed []string `json:"changed"`
 }
